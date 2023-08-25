@@ -73,7 +73,7 @@ def eval_model(args):
     bnb_4bit_quant_type="nf4",
     bnb_4bit_compute_dtype=torch.bfloat16
     )
-    abcde = LlavaLlamaForCausalLM.from_pretrained("/kaggle/working/model", low_cpu_mem_usage=True, torch_dtype=torch.float16, quantization_config=bnb_config, use_cache=True).cuda()
+    abcde = LlavaLlamaForCausalLM.from_pretrained("/kaggle/working/model", low_cpu_mem_usage=True, torch_dtype=torch.bfloat16, use_cache=True)
     model = PeftModel.from_pretrained(abcde, lora_name, adapter_name="default")
     image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
 
