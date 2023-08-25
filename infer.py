@@ -3,15 +3,16 @@ import argparse
 import requests
 from PIL import Image
 from io import BytesIO
-
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 import torch
+from peft import PeftModel
 from transformers import AutoTokenizer
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
-
+from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from threading import Thread
 from llava import LlavaLlamaForCausalLM
 from infer_tokenize import tokenize
 from logger import print_signature 
-
 
 DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
@@ -63,10 +64,17 @@ def load_image(image_file):
 def eval_model(args):
     # Model
     disable_torch_init()
-    model_name = os.path.expanduser(args.model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    model = LlavaLlamaForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True, torch_dtype=torch.float16, use_cache=True).cuda()
+    lora_name = os.path.expanduser(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained("/kaggle/working/model")
+    streamer = TextIteratorStreamer(tokenizer)
+    bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
+    )
+    abcde = LlavaLlamaForCausalLM.from_pretrained("/kaggle/working/model", low_cpu_mem_usage=True, torch_dtype=torch.float16, quantization_config=bnb_config, use_cache=True).cuda()
+    model = PeftModel.from_pretrained(abcde, lora_name, adapter_name="default")
     image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
 
     mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
@@ -93,19 +101,19 @@ def eval_model(args):
     else:
         qs = qs + '\n' + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len
 
-    query = {
-        "conversations": [
-            {
-                'from': 'human',
-                'value': qs
-            },
-            {
-                'from': 'gpt',
-                'value': ''
-            }
-        ]
-    }
-    input_ids = [tokenize(query, tokenizer, args.llm_type)]
+    #query = {
+        #"conversations": [
+            #{
+                #'from': 'human',
+                #'value': qs
+            #},
+            #{
+                #'from': 'gpt',
+                #'value': ''
+            #}
+        #]
+    #}
+    input_ids = [tokenize(qs, tokenizer, args.llm_type)]
     input_ids = torch.as_tensor(input_ids).cuda()
 
     image = load_image(args.image_file)
@@ -128,17 +136,19 @@ def eval_model(args):
     n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
     if n_diff_input_output > 0:
         print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-    outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
-    outputs = outputs.strip()
-    if outputs.endswith(stop_str):
-        outputs = outputs[:-len(stop_str)]
-    outputs = outputs.strip()
+    print(f"Human: image({args.image_file}) {args.query}")
+    generation_kwargs = dict(**inputs, streamer=streamer, max_new_tokens=200, temperature = 0.1,top_k = 20,top_p = 0.4,do_sample=True, repetition_penalty=1.2)
+    thread = Thread(target=text_model2.generate, kwargs=generation_kwargs)
+    thread.start()
+    generated_text = ""
+    for new_text in streamer:
+        print(new_text, end='', flush=True)
+        if new_text.endswith(stop_str):
+            outputs = new_text[:-len(stop_str)]
+    #outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+    #outputs = outputs.strip()
 
     print_signature()
-    print (f"Human: image({args.image_file}) {args.query}")
-    print (f"Chinese-LLaVA: {outputs}")
-    print ("="*80)
-    print ("Go to the Demo page, and have a try!")
 
 
 if __name__ == "__main__":
